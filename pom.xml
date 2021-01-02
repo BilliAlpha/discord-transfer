@@ -6,7 +6,7 @@
 
     <groupId>com.billialpha.discord</groupId>
     <artifactId>discord-transfer</artifactId>
-    <version>1.0</version>
+    <version>2.0</version>
 
     <properties>
         <maven.compiler.target>1.8</maven.compiler.target>
@@ -29,7 +29,6 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <addClasspath>true</addClasspath>
                             <mainClass>com.billialpha.discord.transfer.DiscordTransfer</mainClass>
                         </manifest>
                     </archive>
