@@ -34,7 +34,7 @@ There are also options to customize the migration behavior.
 - `--category`: Specify specific channel categories to migrate, expects a Discord category ID
 - `--skip`: Specify channels that should not be migrated, expects a Discord channel ID
 
-Example: `java -cp [...] com.billialpha.discord.transfer.DiscordTransfer migrate 123456789 987654321 --skip 741852963`
+Example: `java -jar discord-transfer.jar migrate 123456789 987654321 --skip 741852963`
 
 ### More info ? ###
 
