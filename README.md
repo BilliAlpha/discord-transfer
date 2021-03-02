@@ -1,7 +1,7 @@
 # discord-transfer #
 _A discord bot for copying messages between guilds_
 
-**Current version: [v2.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v2.0.1](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 
@@ -11,19 +11,21 @@ Download the JAR from the releases page.
 
 #### Discord bot token ####
 
-1. Create an application on Discord's developper portal: https://discord.com/developers/applications/
+1. Create an application on Discord's developer portal: https://discord.com/developers/applications/
 2. Create a bot for this application
 3. Copy the bot token and pass it to the application via the `DISCORD_TOKEN` environment variable
 
 #### Invite the bot in guilds ####
 
-In order for the bot to migrate messages it needs to be invited in both the source and destination guild, to do so you can use the following URL by replacing in your application ID (which can be found on the Discord developper portal)
+In order for the bot to migrate messages it needs to be invited in both the source and destination guild, to do so you can use the following URL by replacing in your application ID (which can be found on the Discord developer portal)
 
 `https://discord.com/oauth2/authorize?client_id=<CLIENT-ID>&scope=bot`
 
 ### Launching ###
 
 The bot takes three arguments.
+
+`java -jar discord-transfer.jar <action> <source> <destination> [options...]`
 
 1. The action to perform, you probably want to use `migrate` to transfer messages, but there is also the `clean` action that removes the reactions used to mark migrated messages
 2. The Discord ID (Snowflake) of the source Guild (the one you want to copy messages from)

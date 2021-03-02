@@ -19,6 +19,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.function.TupleUtils;
 import reactor.util.annotation.NonNull;
+import reactor.util.function.Tuples;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -42,16 +43,16 @@ import java.util.concurrent.CompletableFuture;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "1";
+    public static final String VERSION = "2.0.1";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     private final GatewayDiscordClient client;
-    private final Guild guildA;
-    private final Guild guildB;
+    private final Guild srcGuild;
+    private final Guild destGuild;
     private Thread thread;
     private Set<Snowflake> categories;
     private Set<Snowflake> skipChannels;
 
-    public DiscordTransfer(String token, long guildA, long guildB) {
+    public DiscordTransfer(String token, long srcGuild, long destGuild) {
         DiscordClient discord = DiscordClient.create(token);
         LOGGER.info("Logging in ...");
         client = Objects.requireNonNull(discord.login().block(), "Invalid bot token");
@@ -63,12 +64,12 @@ public class DiscordTransfer {
                     LOGGER.info("Logging out ...");
                     stop();
                 });
-        Snowflake sourceGuild = Snowflake.of(guildA);
-        this.guildA = Objects.requireNonNull(client.getGuildById(sourceGuild).block(), "Invalid id for guild A");
-        LOGGER.info("Loaded guild A: "+this.guildA.getName()+" ("+guildA+")");
-        Snowflake destGuild = Snowflake.of(guildB);
-        this.guildB = Objects.requireNonNull(client.getGuildById(destGuild).block(), "Invalid id for guild B");
-        LOGGER.info("Loaded guild B: "+this.guildB.getName()+" ("+guildB+")");
+        Snowflake sourceGuild = Snowflake.of(srcGuild);
+        this.srcGuild = Objects.requireNonNull(client.getGuildById(sourceGuild).block(), "Invalid id for source guild");
+        LOGGER.info("Loaded source guild: "+this.srcGuild.getName()+" ("+srcGuild+")");
+        Snowflake destinationGuild = Snowflake.of(destGuild);
+        this.destGuild = Objects.requireNonNull(client.getGuildById(destinationGuild).block(), "Invalid id for dest guild");
+        LOGGER.info("Loaded dest guild: "+this.destGuild.getName()+" ("+destGuild+")");
         this.categories = null;
         this.skipChannels = new HashSet<>(0);
     }
@@ -100,10 +101,10 @@ public class DiscordTransfer {
     private Flux<Category> getSelectedCategories() {
         if (categories != null) {
             return Flux.fromIterable(categories)
-                    .flatMap(guildA::getChannelById)
+                    .flatMap(srcGuild::getChannelById)
                     .ofType(Category.class);
         }
-        return guildA.getChannels().ofType(Category.class);
+        return srcGuild.getChannels().ofType(Category.class);
     }
 
     public Flux<Void> cleanMigratedEmotes() {
@@ -125,14 +126,14 @@ public class DiscordTransfer {
     public void migrate() {
         LOGGER.info("Starting migration ...");
         try {
-            Long migrated = getSelectedCategories().flatMap(catA ->
-                    Flux.from(Mono.justOrEmpty(guildB.getChannels()
+            Long migrated = getSelectedCategories().flatMap(srcCat ->
+                    Flux.from(Mono.justOrEmpty(destGuild.getChannels()
                             .ofType(Category.class)
-                            .filter(c -> c.getName().equals(catA.getName()))
+                            .filter(c -> c.getName().equals(srcCat.getName()))
                             .blockFirst())
                     .switchIfEmpty(
-                            guildB.createCategory(c -> c.setName(catA.getName()))
-                    )).flatMap(catB -> migrateCategory(catA, catB))
+                            destGuild.createCategory(c -> c.setName(srcCat.getName()))
+                    )).flatMap(dstCat -> migrateCategory(srcCat, dstCat))
             ).count().block();
             LOGGER.info("Migration finished successfully ("+migrated+" messages)");
             client.logout().block();
@@ -144,48 +145,49 @@ public class DiscordTransfer {
         }
     }
 
-    private Flux<Message> migrateCategory(@NonNull Category catA, @NonNull Category catB) {
-        LOGGER.info("Migrating category: "+catA.getName());
+    private Flux<Message> migrateCategory(@NonNull Category srcCat, @NonNull Category dstCat) {
+        LOGGER.info("Migrating category: "+srcCat.getName());
         return Flux.concat(
-                migrateCategoryVoiceChannels(catA, catB),
-                migrateCategoryTextChannels(catA, catB)
+                migrateCategoryVoiceChannels(srcCat, dstCat),
+                migrateCategoryTextChannels(srcCat, dstCat)
         ).onErrorResume(err -> {
             LOGGER.warn("Error in category migration", err);
             return Mono.empty();
         });
     }
 
-    private Flux<Message> migrateCategoryVoiceChannels(@NonNull Category catA, @NonNull Category catB) {
-        return catA.getChannels().ofType(VoiceChannel.class)
+    private Flux<Message> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
+        return srcCat.getChannels().ofType(VoiceChannel.class)
                 // Filter on non-migrated channels
-                .filter(chanA -> catB.getChannels()
+                .filter(srcChan -> dstCat.getChannels()
                         .ofType(VoiceChannel.class)
-                        .filter(c -> c.getName().equals(chanA.getName()))
+                        .filter(c -> c.getName().equals(srcChan.getName()))
                         .blockFirst() == null
                 )
                 // Actually create channel
-                .flatMap(chanA -> guildB.createVoiceChannel(c -> c
-                        .setName(chanA.getName())
-                        .setParentId(catB.getId())
-                        .setPosition(chanA.getRawPosition())
+                .flatMap(srcChan -> destGuild.createVoiceChannel(c -> c
+                        .setName(srcChan.getName())
+                        .setParentId(dstCat.getId())
+                        .setPosition(srcChan.getRawPosition())
                 ).flatMap(h -> Mono.empty()));
     }
 
-    private Flux<Message> migrateCategoryTextChannels(@NonNull Category catA, @NonNull Category catB) {
-        return catA.getChannels().ofType(TextChannel.class)
+    private Flux<Message> migrateCategoryTextChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
+        return srcCat.getChannels().ofType(TextChannel.class)
                 // Filter on non-skipped channels
                 .filter(c -> !skipChannels.contains(c.getId()))
-                .flatMap(chanA -> catB.getChannels()
+                .flatMap(srcChan -> dstCat.getChannels()
                         .ofType(TextChannel.class)
-                        .filter(c -> c.getName().equals(chanA.getName()))
-                        .single()
-                        .switchIfEmpty(guildB.createTextChannel(c -> c
-                                .setName(chanA.getName())
-                                .setTopic(chanA.getTopic().orElse(null))
-                                .setNsfw(chanA.isNsfw())
-                                .setParentId(catB.getId())
-                                .setPosition(chanA.getRawPosition())))
-                        .zipWith(Mono.just(chanA)))
+                        .filter(c -> c.getName().equals(srcChan.getName()))
+                        .singleOrEmpty()
+                        .switchIfEmpty(destGuild.createTextChannel(c -> c
+                                .setName(srcChan.getName())
+                                .setTopic(srcChan.getTopic().orElse(null))
+                                .setNsfw(srcChan.isNsfw())
+                                .setParentId(dstCat.getId())
+                                .setPosition(srcChan.getRawPosition())))
+                        .zipWith(Mono.just(srcChan)))
+                .map(tuple -> Tuples.of(tuple.getT2(), tuple.getT1()))
                 .flatMap(TupleUtils.function(this::migrateTextChannel))
                 .onErrorResume(err -> {
                     LOGGER.warn("Error in channel migration", err);
@@ -194,26 +196,25 @@ public class DiscordTransfer {
     }
 
     private static final ReactionEmoji MIGRATED_EMOJI = ReactionEmoji.unicode("\uD83D\uDD04");
-    private Flux<Message> migrateTextChannel(@NonNull TextChannel chanA, @NonNull TextChannel chanB) {
-        LOGGER.info("Migrating channel: "+chanA.getName());
-        return chanA.getMessagesAfter(chanA.getId())
+    private Flux<Message> migrateTextChannel(@NonNull TextChannel srcChan, @NonNull TextChannel dstChan) {
+        LOGGER.info("Migrating channel: "+srcChan.getName());
+        LOGGER.debug("Channel date: "+srcChan.getId().getTimestamp().toString());
+        return srcChan.getMessagesAfter(srcChan.getId())
                 .delayElements(Duration.ofMillis(500)) // Delay to reduce rate-limiting
-                //*
                 .filter(m -> m.getReactions().stream() // Filter on non migrated messages
                                 .filter(Reaction::selfReacted)
                                 .noneMatch(r -> r.getEmoji().equals(MIGRATED_EMOJI)))
-                //*/
-                .flatMap(m -> migrateMessage(m, chanB)); // Perform migration
+                .flatMap(m -> migrateMessage(m, dstChan)); // Perform migration
     }
 
-    private Mono<Message> migrateMessage(@NonNull Message msg, @NonNull TextChannel chanB) {
+    private Mono<Message> migrateMessage(@NonNull Message msg, @NonNull TextChannel dstChan) {
         if (msg.getType() != Message.Type.DEFAULT) return Mono.empty(); // Not a user message, do not migrate
         if (!msg.getAuthor().isPresent()) return Mono.empty(); // No author, do not migrate
         CompletableFuture<Message> fut = new CompletableFuture<>();
         User author = msg.getAuthor().get();
-        LOGGER.info("Migrating message ("+chanB.getName()+"/#"+msg.getId().asString()+"): "+
+        LOGGER.info("Migrating message ("+dstChan.getName()+"/#"+msg.getId().asString()+"): "+
                 author.getUsername()+" at "+msg.getTimestamp().toString());
-        chanB.createMessage(m -> {
+        dstChan.createMessage(m -> {
             Attachment image = null;
             for (Attachment att : msg.getAttachments()) {
                 if (image == null && att.getWidth().isPresent()) {
@@ -273,14 +274,14 @@ public class DiscordTransfer {
             System.out.println();
             System.out.println("A discord bot for copying messages between guilds");
             System.out.println();
-            System.out.println("Usage: <action> <guildA> <guildB> [options...]");
+            System.out.println("Usage: <action> <srcGuild> <destGuild> [options...]");
             System.out.println("  Arguments:");
             System.out.println("    <action>: The action to perform");
             System.out.println("      help - Show this message and exit");
-            System.out.println("      migrate - Migrate messages from guild A to guild B");
+            System.out.println("      migrate - Migrate messages from source guild to dest guild");
             System.out.println("      clean - Delete migration reactions");
-            System.out.println("    <guildA>: The Discord ID of the source guild");
-            System.out.println("    <guildB>: The Discord ID of the destination guild");
+            System.out.println("    <srcGuild>: The Discord ID of the source guild");
+            System.out.println("    <destGuild>: The Discord ID of the destination guild");
             System.out.println();
             System.out.println("  Options:");
             System.out.println("    --category <ID>, -c <ID>");
@@ -298,7 +299,7 @@ public class DiscordTransfer {
         }
 
         if (args.length < 3) {
-            System.err.println("Missing arguments (action, guildA, guildB)");
+            System.err.println("Missing arguments (action, srcGuild, destGuild)");
             System.out.println("See 'help' action for help");
             return;
         }
@@ -310,18 +311,18 @@ public class DiscordTransfer {
             return;
         }
 
-        long guildA;
-        long guildB;
+        long srcGuild;
+        long destGuild;
         try {
-            guildA = Long.parseLong(args[1]);
-            guildB = Long.parseLong(args[2]);
+            srcGuild = Long.parseLong(args[1]);
+            destGuild = Long.parseLong(args[2]);
         } catch (NumberFormatException e) {
             System.err.println("Invalid guild IDs");
             System.out.println("See 'help' action for help");
             return;
         }
 
-        DiscordTransfer app = new DiscordTransfer(token, guildA, guildB);
+        DiscordTransfer app = new DiscordTransfer(token, srcGuild, destGuild);
 
         if (args.length > 3) {
             for (int i = 3; i < args.length; i++) {
