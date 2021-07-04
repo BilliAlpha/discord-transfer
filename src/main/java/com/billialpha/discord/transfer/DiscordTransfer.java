@@ -28,13 +28,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
-import java.util.Spliterator;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -43,7 +39,7 @@ import java.util.concurrent.CompletableFuture;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "2.0.1";
+    public static final String VERSION = "2.0.2";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     private final GatewayDiscordClient client;
     private final Guild srcGuild;
