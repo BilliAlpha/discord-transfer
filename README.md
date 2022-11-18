@@ -1,7 +1,7 @@
 # discord-transfer #
 _A discord bot for copying messages between guilds_
 
-**Current version: [v2.0.2](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v2.1.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 

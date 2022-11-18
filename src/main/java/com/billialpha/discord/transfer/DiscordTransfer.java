@@ -13,6 +13,11 @@ import discord4j.core.object.entity.channel.TextChannel;
 import discord4j.core.object.entity.channel.VoiceChannel;
 import discord4j.core.object.reaction.Reaction;
 import discord4j.core.object.reaction.ReactionEmoji;
+import discord4j.core.spec.EmbedCreateSpec;
+import discord4j.core.spec.MessageCreateSpec;
+import discord4j.core.spec.TextChannelCreateSpec;
+import discord4j.core.spec.VoiceChannelCreateSpec;
+import discord4j.discordjson.possible.Possible;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -30,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -39,14 +45,14 @@ import java.util.concurrent.CompletableFuture;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "2.0.2";
+    public static final String VERSION = "2.1.0";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     private final GatewayDiscordClient client;
     private final Guild srcGuild;
     private final Guild destGuild;
-    private Thread thread;
+    private final Set<Snowflake> skipChannels;
     private Set<Snowflake> categories;
-    private Set<Snowflake> skipChannels;
+    private Thread thread;
 
     public DiscordTransfer(String token, long srcGuild, long destGuild) {
         DiscordClient discord = DiscordClient.create(token);
@@ -110,11 +116,11 @@ public class DiscordTransfer {
                 .flatMap(c -> c.getMessagesAfter(c.getId()))
                 .filter(m -> m.getType() == Message.Type.DEFAULT)
                 .delayElements(Duration.ofMillis(500))
-                .map(m -> {
-                    User author = m.getAuthor().get();
+                .doOnNext(m -> {
+                    Optional<User> author = m.getAuthor();
+                    if (!author.isPresent()) return;
                     LOGGER.info("Cleaning reaction ("+m.getChannelId().asString()+"/#"+m.getId().asString()+"): "+
-                            author.getUsername()+" at "+m.getTimestamp().toString());
-                    return m;
+                            author.get().getUsername()+" at "+m.getTimestamp());
                 })
                 .flatMap(m -> m.removeSelfReaction(MIGRATED_EMOJI));
     }
@@ -128,7 +134,7 @@ public class DiscordTransfer {
                             .filter(c -> c.getName().equals(srcCat.getName()))
                             .blockFirst())
                     .switchIfEmpty(
-                            destGuild.createCategory(c -> c.setName(srcCat.getName()))
+                            destGuild.createCategory(srcCat.getName())
                     )).flatMap(dstCat -> migrateCategory(srcCat, dstCat))
             ).count().block();
             LOGGER.info("Migration finished successfully ("+migrated+" messages)");
@@ -161,10 +167,10 @@ public class DiscordTransfer {
                         .blockFirst() == null
                 )
                 // Actually create channel
-                .flatMap(srcChan -> destGuild.createVoiceChannel(c -> c
-                        .setName(srcChan.getName())
-                        .setParentId(dstCat.getId())
-                        .setPosition(srcChan.getRawPosition())
+                .flatMap(srcChan -> destGuild.createVoiceChannel(VoiceChannelCreateSpec.builder()
+                                .name(srcChan.getName())
+                                .parentId(dstCat.getId())
+                                .position(srcChan.getRawPosition()).build()
                 ).flatMap(h -> Mono.empty()));
     }
 
@@ -176,12 +182,13 @@ public class DiscordTransfer {
                         .ofType(TextChannel.class)
                         .filter(c -> c.getName().equals(srcChan.getName()))
                         .singleOrEmpty()
-                        .switchIfEmpty(destGuild.createTextChannel(c -> c
-                                .setName(srcChan.getName())
-                                .setTopic(srcChan.getTopic().orElse(null))
-                                .setNsfw(srcChan.isNsfw())
-                                .setParentId(dstCat.getId())
-                                .setPosition(srcChan.getRawPosition())))
+                        .switchIfEmpty(destGuild.createTextChannel(TextChannelCreateSpec.builder()
+                                .name(srcChan.getName())
+                                .topic(srcChan.getTopic().map(Possible::of).orElse(Possible.absent()))
+                                .nsfw(srcChan.isNsfw())
+                                .parentId(dstCat.getId())
+                                .position(srcChan.getRawPosition())
+                                .build()))
                         .zipWith(Mono.just(srcChan)))
                 .map(tuple -> Tuples.of(tuple.getT2(), tuple.getT1()))
                 .flatMap(TupleUtils.function(this::migrateTextChannel))
@@ -194,7 +201,7 @@ public class DiscordTransfer {
     private static final ReactionEmoji MIGRATED_EMOJI = ReactionEmoji.unicode("\uD83D\uDD04");
     private Flux<Message> migrateTextChannel(@NonNull TextChannel srcChan, @NonNull TextChannel dstChan) {
         LOGGER.info("Migrating channel: "+srcChan.getName());
-        LOGGER.debug("Channel date: "+srcChan.getId().getTimestamp().toString());
+        LOGGER.debug("Channel date: "+srcChan.getId().getTimestamp());
         return srcChan.getMessagesAfter(srcChan.getId())
                 .delayElements(Duration.ofMillis(500)) // Delay to reduce rate-limiting
                 .filter(m -> m.getReactions().stream() // Filter on non migrated messages
@@ -204,56 +211,57 @@ public class DiscordTransfer {
     }
 
     private Mono<Message> migrateMessage(@NonNull Message msg, @NonNull TextChannel dstChan) {
-        if (msg.getType() != Message.Type.DEFAULT) return Mono.empty(); // Not a user message, do not migrate
+        if (msg.getType() != Message.Type.DEFAULT && msg.getType() != Message.Type.REPLY)
+            return Mono.empty(); // Not a user message, do not migrate
         if (!msg.getAuthor().isPresent()) return Mono.empty(); // No author, do not migrate
         CompletableFuture<Message> fut = new CompletableFuture<>();
         User author = msg.getAuthor().get();
         LOGGER.info("Migrating message ("+dstChan.getName()+"/#"+msg.getId().asString()+"): "+
-                author.getUsername()+" at "+msg.getTimestamp().toString());
-        dstChan.createMessage(m -> {
-            Attachment image = null;
-            for (Attachment att : msg.getAttachments()) {
-                if (image == null && att.getWidth().isPresent()) {
-                    image = att;
-                    continue;
-                }
-                try {
-                    HttpURLConnection conn = (HttpURLConnection) new URL(att.getUrl()).openConnection();
-                    conn.setRequestProperty("User-Agent", "DiscordTransfer (v"+VERSION+")");
-                    if (conn.getResponseCode()/100 != 2 && conn.getContentLength() > 0) {
-                        InputStream stream = conn.getErrorStream();
-                        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                        int nRead;
-                        byte[] data = new byte[1024];
-                        while ((nRead = stream.read(data, 0, data.length)) != -1) {
-                            buffer.write(data, 0, nRead);
-                        }
-                        stream.close();
-                        buffer.flush();
-                        LOGGER.warn("Attachment HTTP error:\n"+new String(buffer.toByteArray(), StandardCharsets.UTF_8));
-                    } else m.addFile(att.getFilename(), conn.getInputStream());
-                } catch (IOException e) {
-                    LOGGER.warn("Unable to forward attachment", e);
-                }
+                author.getUsername()+" at "+msg.getTimestamp());
+        MessageCreateSpec.Builder m = MessageCreateSpec.builder();
+        Attachment image = null;
+        for (Attachment att : msg.getAttachments()) {
+            if (image == null && att.getWidth().isPresent()) {
+                image = att;
+                continue;
             }
-            LOGGER.debug("Raw message:\n\t"+msg.getContent().replaceAll("\n", "\n\t"));
-            String message = msg.getContent().replaceAll("<@&\\d+>", ""); // Remove role mentions
-            Attachment finalImage = image;
-            m.setEmbed(e -> {
-                e.setAuthor(author.getUsername(), "https://discord.com/channels/@me/" + author.getId().asString(), author.getAvatarUrl())
-                        .setTimestamp(msg.getEditedTimestamp().orElse(msg.getTimestamp()))
-                        .setDescription(message);
-                if (finalImage != null) e.setImage(finalImage.getUrl());
-            });
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(att.getUrl()).openConnection();
+                conn.setRequestProperty("User-Agent", "DiscordTransfer (v"+VERSION+")");
+                if (conn.getResponseCode()/100 != 2 && conn.getContentLength() > 0) {
+                    InputStream stream = conn.getErrorStream();
+                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                    int nRead;
+                    byte[] data = new byte[1024];
+                    while ((nRead = stream.read(data, 0, data.length)) != -1) {
+                        buffer.write(data, 0, nRead);
+                    }
+                    stream.close();
+                    buffer.flush();
+                    LOGGER.warn("Attachment HTTP error:\n"+new String(buffer.toByteArray(), StandardCharsets.UTF_8));
+                } else m.addFile(att.getFilename(), conn.getInputStream());
+            } catch (IOException e) {
+                LOGGER.warn("Unable to forward attachment", e);
+            }
         }
+        LOGGER.debug("Raw message:\n\t"+msg.getContent().replaceAll("\n", "\n\t"));
+        String message = msg.getContent().replaceAll("<@&\\d+>", ""); // Remove role mentions
+        EmbedCreateSpec.Builder embed = EmbedCreateSpec.builder()
+                .author(author.getUsername(), "https://discord.com/channels/@me/" + author.getId().asString(), author.getAvatarUrl())
+                .timestamp(msg.getEditedTimestamp().orElse(msg.getTimestamp()))
+                .description(message);
+        if (image != null) embed.image(image.getUrl());
+        m.addEmbed(embed.build());
+        dstChan.createMessage(m.build())
         /*
-        ).onErrorResume(err -> {
+        .onErrorResume(err -> {
             LOGGER.warn("Error in message migration", err);
-            return Mono.empty();}
+            return Mono.empty();
+        })
         //*/
-        ).subscribe(
-                m -> msg.addReaction(MIGRATED_EMOJI)
-                    .doOnSuccess(h -> fut.complete(m))
+        .subscribe(
+                createdMessage -> msg.addReaction(MIGRATED_EMOJI)
+                    .doOnSuccess(h -> fut.complete(createdMessage))
                     .doOnError(fut::completeExceptionally)
                     .subscribe(),
                 fut::completeExceptionally);
