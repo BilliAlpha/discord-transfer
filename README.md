@@ -13,7 +13,8 @@ Download the JAR from the releases page.
 
 1. Create an application on Discord's developer portal: https://discord.com/developers/applications/
 2. Create a bot for this application
-3. Copy the bot token and pass it to the application via the `DISCORD_TOKEN` environment variable
+3. Enable the **`MESSAGE CONTENT`** privileged gateway intent.
+4. Copy the bot token and pass it to the application via the `DISCORD_TOKEN` environment variable
 
 #### Invite the bot in guilds ####
 
@@ -22,6 +23,19 @@ In order for the bot to migrate messages it needs to be invited in both the sour
 `https://discord.com/oauth2/authorize?client_id=<CLIENT-ID>&scope=bot`
 
 ### Launching ###
+
+Pass the Discord bot token via environment variable.
+
+- On **linux** and **macOS** open a terminal (bash) and simply prefix your command with the token as such :
+```bash
+DISCORD_TOKEN="MY_TOKEN_HERE" java -jar discord-transfer.jar [arguments...]
+```
+
+- On **windows** you can use `powershell`. Define you environment variable then run the program :
+```powershell
+$env:DISCORD_TOKEN="MY_BOT_TOKEN_HERE"
+java -jar discord-transfer.jar [arguments...]
+```
 
 The bot takes three arguments.
 
