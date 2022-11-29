@@ -1,7 +1,7 @@
 # discord-transfer #
 _A discord bot for copying messages between guilds_
 
-**Current version: [v2.1.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v2.2.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 
@@ -31,7 +31,7 @@ Pass the Discord bot token via environment variable.
 DISCORD_TOKEN="MY_TOKEN_HERE" java -jar discord-transfer.jar [arguments...]
 ```
 
-- On **windows** you can use `powershell`. Define you environment variable then run the program :
+- On **Windows** you can use `powershell`. Define your environment variable then run the program :
 ```powershell
 $env:DISCORD_TOKEN="MY_BOT_TOKEN_HERE"
 java -jar discord-transfer.jar [arguments...]
@@ -49,6 +49,8 @@ There are also options to customize the migration behavior.
 
 - `--category`: Specify specific channel categories to migrate, expects a Discord category ID
 - `--skip`: Specify channels that should not be migrated, expects a Discord channel ID
+- `--after`: Only migrate messages after the give date (format ISO-8601, ex: `1997−07−16T19:20:30,451Z`)
+- `--delay`: Add a delay between each message migration
 
 Example: `java -jar discord-transfer.jar migrate 123456789 987654321 --skip 741852963`
 

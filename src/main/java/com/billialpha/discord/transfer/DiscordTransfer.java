@@ -22,9 +22,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.function.TupleUtils;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.annotation.NonNull;
-import reactor.util.function.Tuples;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -33,11 +33,14 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 /**
  * Bot invite link:
@@ -45,14 +48,17 @@ import java.util.concurrent.CompletableFuture;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "2.1.0";
+    public static final String VERSION = "2.2.0";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     private final GatewayDiscordClient client;
     private final Guild srcGuild;
     private final Guild destGuild;
     private final Set<Snowflake> skipChannels;
     private Set<Snowflake> categories;
+    private Instant afterDate;
+    private int delay;
     private Thread thread;
+    private final Scheduler scheduler;
 
     public DiscordTransfer(String token, long srcGuild, long destGuild) {
         DiscordClient discord = DiscordClient.create(token);
@@ -74,6 +80,7 @@ public class DiscordTransfer {
         LOGGER.info("Loaded dest guild: "+this.destGuild.getName()+" ("+destGuild+")");
         this.categories = null;
         this.skipChannels = new HashSet<>(0);
+        this.scheduler = Schedulers.parallel();
     }
 
     public void start() {
@@ -100,6 +107,22 @@ public class DiscordTransfer {
         categories.add(categoryId);
     }
 
+    public void afterDate(Instant after) {
+        this.afterDate = after;
+    }
+
+    public void widthDelay(int delay) {
+        this.delay = delay;
+    }
+
+    private Snowflake getChannelStartDate(Snowflake chanId) {
+        if (this.afterDate == null)
+            return chanId;
+        return this.afterDate.isAfter(chanId.getTimestamp())
+                ? Snowflake.of(this.afterDate)
+                : chanId;
+    }
+
     private Flux<Category> getSelectedCategories() {
         if (categories != null) {
             return Flux.fromIterable(categories)
@@ -110,13 +133,13 @@ public class DiscordTransfer {
     }
 
     public Flux<Void> cleanMigratedEmotes() {
-        return getSelectedCategories().flatMap(Category::getChannels)
+        Flux<Message> flux = getSelectedCategories().flatMap(Category::getChannels)
                 .ofType(TextChannel.class)
                 .filter(c -> !skipChannels.contains(c.getId()))
-                .flatMap(c -> c.getMessagesAfter(c.getId()))
-                .filter(m -> m.getType() == Message.Type.DEFAULT)
-                .delayElements(Duration.ofMillis(500))
-                .doOnNext(m -> {
+                .flatMap(c -> c.getMessagesAfter(getChannelStartDate(c.getId())))
+                .filter(m -> m.getType() == Message.Type.DEFAULT || m.getType() == Message.Type.REPLY);
+        if (delay > 0) flux = flux.delayElements(Duration.ofMillis(delay));
+        return flux.doOnNext(m -> {
                     Optional<User> author = m.getAuthor();
                     if (!author.isPresent()) return;
                     LOGGER.info("Cleaning reaction ("+m.getChannelId().asString()+"/#"+m.getId().asString()+"): "+
@@ -128,15 +151,19 @@ public class DiscordTransfer {
     public void migrate() {
         LOGGER.info("Starting migration ...");
         try {
-            Long migrated = getSelectedCategories().flatMap(srcCat ->
-                    Flux.from(Mono.justOrEmpty(destGuild.getChannels()
-                            .ofType(Category.class)
+            Long migrated = getSelectedCategories()
+                .parallel()
+                .runOn(scheduler)
+                .flatMap(srcCat ->
+                    destGuild.getChannels().ofType(Category.class)
                             .filter(c -> c.getName().equals(srcCat.getName()))
-                            .blockFirst())
-                    .switchIfEmpty(
-                            destGuild.createCategory(srcCat.getName())
-                    )).flatMap(dstCat -> migrateCategory(srcCat, dstCat))
-            ).count().block();
+                            .singleOrEmpty()
+                            .switchIfEmpty(
+                                    destGuild.createCategory(srcCat.getName()))
+                            .flatMapMany(dstCat -> migrateCategory(srcCat, dstCat))
+                )
+                .reduce(Long::sum)
+                .block();
             LOGGER.info("Migration finished successfully ("+migrated+" messages)");
             client.logout().block();
             LOGGER.info("Logged out");
@@ -147,18 +174,19 @@ public class DiscordTransfer {
         }
     }
 
-    private Flux<Message> migrateCategory(@NonNull Category srcCat, @NonNull Category dstCat) {
+    private Mono<Long> migrateCategory(@NonNull Category srcCat, @NonNull Category dstCat) {
         LOGGER.info("Migrating category: "+srcCat.getName());
-        return Flux.concat(
-                migrateCategoryVoiceChannels(srcCat, dstCat),
-                migrateCategoryTextChannels(srcCat, dstCat)
-        ).onErrorResume(err -> {
-            LOGGER.warn("Error in category migration", err);
-            return Mono.empty();
-        });
+        return migrateCategoryVoiceChannels(srcCat, dstCat)
+                .then(migrateCategoryTextChannels(srcCat, dstCat)
+                        .map(TextChannelMigrationResult::getMessageCount)
+                        .reduce(Long::sum))
+                .onErrorResume(err -> {
+                    LOGGER.warn("Error in category migration", err);
+                    return Mono.empty();
+                });
     }
 
-    private Flux<Message> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
+    private Mono<Void> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
         return srcCat.getChannels().ofType(VoiceChannel.class)
                 // Filter on non-migrated channels
                 .filter(srcChan -> dstCat.getChannels()
@@ -170,12 +198,13 @@ public class DiscordTransfer {
                 .flatMap(srcChan -> destGuild.createVoiceChannel(VoiceChannelCreateSpec.builder()
                                 .name(srcChan.getName())
                                 .parentId(dstCat.getId())
-                                .position(srcChan.getRawPosition()).build()
-                ).flatMap(h -> Mono.empty()));
+                                .position(srcChan.getRawPosition()).build()))
+                .then();
     }
 
-    private Flux<Message> migrateCategoryTextChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
+    private Flux<TextChannelMigrationResult> migrateCategoryTextChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
         return srcCat.getChannels().ofType(TextChannel.class)
+                .parallel().runOn(scheduler)
                 // Filter on non-skipped channels
                 .filter(c -> !skipChannels.contains(c.getId()))
                 .flatMap(srcChan -> dstCat.getChannels()
@@ -190,8 +219,11 @@ public class DiscordTransfer {
                                 .position(srcChan.getRawPosition())
                                 .build()))
                         .zipWith(Mono.just(srcChan)))
-                .map(tuple -> Tuples.of(tuple.getT2(), tuple.getT1()))
-                .flatMap(TupleUtils.function(this::migrateTextChannel))
+                // T1 = dest chan, T2 = src chan
+                .flatMap(tuple -> migrateTextChannel(tuple.getT2(), tuple.getT1())
+                        .count()
+                        .map(count -> new TextChannelMigrationResult(tuple.getT2(), tuple.getT1(), count)))
+                .groups().flatMap(Flux::collectList).flatMapIterable(Function.identity())
                 .onErrorResume(err -> {
                     LOGGER.warn("Error in channel migration", err);
                     return Mono.empty();
@@ -201,12 +233,13 @@ public class DiscordTransfer {
     private static final ReactionEmoji MIGRATED_EMOJI = ReactionEmoji.unicode("\uD83D\uDD04");
     private Flux<Message> migrateTextChannel(@NonNull TextChannel srcChan, @NonNull TextChannel dstChan) {
         LOGGER.info("Migrating channel: "+srcChan.getName());
-        LOGGER.debug("Channel date: "+srcChan.getId().getTimestamp());
-        return srcChan.getMessagesAfter(srcChan.getId())
-                .delayElements(Duration.ofMillis(500)) // Delay to reduce rate-limiting
-                .filter(m -> m.getReactions().stream() // Filter on non migrated messages
-                                .filter(Reaction::selfReacted)
-                                .noneMatch(r -> r.getEmoji().equals(MIGRATED_EMOJI)))
+        Snowflake startDate = getChannelStartDate(srcChan.getId());
+        LOGGER.debug("Channel date: "+startDate.getTimestamp());
+        Flux<Message> flux = srcChan.getMessagesAfter(startDate);
+        if (delay > 0) flux = flux.delayElements(Duration.ofMillis(delay)); // Delay to reduce rate-limiting
+        return flux.filter(m -> m.getReactions().stream() // Filter on non migrated messages
+                        .filter(Reaction::selfReacted)
+                        .noneMatch(r -> r.getEmoji().equals(MIGRATED_EMOJI)))
                 .flatMap(m -> migrateMessage(m, dstChan)); // Perform migration
     }
 
@@ -247,7 +280,10 @@ public class DiscordTransfer {
         LOGGER.debug("Raw message:\n\t"+msg.getContent().replaceAll("\n", "\n\t"));
         String message = msg.getContent().replaceAll("<@&\\d+>", ""); // Remove role mentions
         EmbedCreateSpec.Builder embed = EmbedCreateSpec.builder()
-                .author(author.getUsername(), "https://discord.com/channels/@me/" + author.getId().asString(), author.getAvatarUrl())
+                .author(
+                        author.getUsername(),
+                        "https://discord.com/channels/@me/" + author.getId().asString(),
+                        author.getAvatarUrl())
                 .timestamp(msg.getEditedTimestamp().orElse(msg.getTimestamp()))
                 .description(message);
         if (image != null) embed.image(image.getUrl());
@@ -266,6 +302,30 @@ public class DiscordTransfer {
                     .subscribe(),
                 fut::completeExceptionally);
         return Mono.fromFuture(fut);
+    }
+
+    public static class TextChannelMigrationResult {
+        public final TextChannel sourceChan;
+        public final TextChannel destChan;
+        public final long messageCount;
+
+        public TextChannelMigrationResult(TextChannel sourceChan, TextChannel destChan, long messageCount) {
+            this.sourceChan = sourceChan;
+            this.destChan = destChan;
+            this.messageCount = messageCount;
+        }
+
+        public TextChannel getSourceChan() {
+            return sourceChan;
+        }
+
+        public TextChannel getDestChan() {
+            return destChan;
+        }
+
+        public long getMessageCount() {
+            return messageCount;
+        }
     }
 
     // =================================================================================================================
@@ -296,6 +356,14 @@ public class DiscordTransfer {
             System.out.println("    --skip <ID>, -s <ID>");
             System.out.println("      Do not migrate a channel, this option expects a Discord ID.");
             System.out.println("      You can use this option multiple times to skip multiple channels.");
+            System.out.println();
+            System.out.println("    --after <DATE>, -a <DATE>");
+            System.out.println("      Only migrate messages sent after the given date.");
+            System.out.println("      Date is expected to follow ISO-8601 format (ex: `1997−07−16T19:20:30,451Z`)");
+            System.out.println();
+            System.out.println("    --delay <DELAY>, -d <DELAY>");
+            System.out.println("      Add a delay (in milliseconds) between each message migration.");
+            System.out.println("      By default there is no delay.");
             System.out.println();
             System.out.println("  Environment variables:");
             System.out.println("    DISCORD_TOKEN: Required, the Discord bot token");
@@ -349,6 +417,26 @@ public class DiscordTransfer {
                         return;
                     } catch (NumberFormatException ex) {
                         System.err.println("Invalid skip channel ID: "+args[i]);
+                        return;
+                    }
+                } else if ("-a".equals(arg) || "--after".equals(arg)) {
+                    try {
+                        app.afterDate(Instant.parse(args[++i]));
+                    } catch (ArrayIndexOutOfBoundsException ex) {
+                        System.err.println("Missing DATE value");
+                        return;
+                    } catch (DateTimeParseException ex) {
+                        System.err.println("Invalid DATE format: "+args[i]);
+                        return;
+                    }
+                } else if ("-d".equals(arg) || "--delay".equals(arg)) {
+                    try {
+                        app.widthDelay(Integer.parseUnsignedInt(args[++i]));
+                    } catch (ArrayIndexOutOfBoundsException ex) {
+                        System.err.println("Missing DELAY value");
+                        return;
+                    } catch (NumberFormatException ex) {
+                        System.err.println("Invalid DELAY: "+args[i]);
                         return;
                     }
                 } else {
