@@ -1,7 +1,7 @@
 # discord-transfer #
 _A discord bot for copying messages between guilds_
 
-**Current version: [v2.2.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v2.2.1](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 
@@ -18,20 +18,21 @@ Download the JAR from the releases page.
 
 #### Invite the bot in guilds ####
 
-In order for the bot to migrate messages it needs to be invited in both the source and destination guild, to do so you can use the following URL by replacing in your application ID (which can be found on the Discord developer portal)
+In order for the bot to migrate messages it needs to be invited in both the source and destination guild,
+to do so you can use the following URL by replacing in your application ID (which can be found on the Discord developer portal)
 
 `https://discord.com/oauth2/authorize?client_id=<CLIENT-ID>&scope=bot`
 
 ### Launching ###
 
-Pass the Discord bot token via environment variable.
+Pass the Discord bot token via environment variables.
 
-- On **linux** and **macOS** open a terminal (bash) and simply prefix your command with the token as such :
+- On **linux** and **macOS** open a terminal (bash) and simply prefix your command with the token as such:
 ```bash
 DISCORD_TOKEN="MY_TOKEN_HERE" java -jar discord-transfer.jar [arguments...]
 ```
 
-- On **Windows** you can use `powershell`. Define your environment variable then run the program :
+- On **Windows** you can use `powershell`. Define your environment variable and then run the program:
 ```powershell
 $env:DISCORD_TOKEN="MY_BOT_TOKEN_HERE"
 java -jar discord-transfer.jar [arguments...]
@@ -41,7 +42,8 @@ The bot takes three arguments.
 
 `java -jar discord-transfer.jar <action> <source> <destination> [options...]`
 
-1. The action to perform, you probably want to use `migrate` to transfer messages, but there is also the `clean` action that removes the reactions used to mark migrated messages
+1. The action to perform, you probably want to use `migrate` to transfer messages,
+but there is also the `clean` action that removes the reactions used to mark migrated messages
 2. The Discord ID (Snowflake) of the source Guild (the one you want to copy messages from)
 3. The Discord ID of the destination Guild (the one in which messages will be copied)
 

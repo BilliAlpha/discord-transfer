@@ -48,7 +48,7 @@ import java.util.function.Function;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "2.2.0";
+    public static final String VERSION = "2.2.1";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     private final GatewayDiscordClient client;
     private final Guild srcGuild;
@@ -189,10 +189,11 @@ public class DiscordTransfer {
     private Mono<Void> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
         return srcCat.getChannels().ofType(VoiceChannel.class)
                 // Filter on non-migrated channels
-                .filter(srcChan -> dstCat.getChannels()
+                .filterWhen(srcChan -> dstCat.getChannels()
                         .ofType(VoiceChannel.class)
                         .filter(c -> c.getName().equals(srcChan.getName()))
-                        .blockFirst() == null
+                        .count()
+                        .map(c -> c == 0)
                 )
                 // Actually create channel
                 .flatMap(srcChan -> destGuild.createVoiceChannel(VoiceChannelCreateSpec.builder()
