@@ -6,7 +6,7 @@
 
     <groupId>com.billialpha.discord</groupId>
     <artifactId>discord-transfer</artifactId>
-    <version>2.2.1</version>
+    <version>2.2.2</version>
 
     <properties>
         <maven.compiler.target>1.8</maven.compiler.target>
