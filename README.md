@@ -1,6 +1,8 @@
 # discord-transfer #
 _A discord bot for copying messages between guilds_
 
+[![build](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml/badge.svg)](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml)
+
 **Current version: [v2.2.2](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
