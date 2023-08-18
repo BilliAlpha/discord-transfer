@@ -169,7 +169,7 @@ public class DiscordTransfer {
         if (delay > 0) flux = flux.delayElements(Duration.ofMillis(delay));
         return flux.doOnNext(m -> {
                     Optional<User> author = m.getAuthor();
-                    if (!author.isPresent()) return;
+                    if (author.isEmpty()) return;
                     LOGGER.info("Cleaning reaction ("+m.getChannelId().asString()+"/#"+m.getId().asString()+"): "+
                             author.get().getUsername()+" at "+m.getTimestamp());
                 })
@@ -203,7 +203,7 @@ public class DiscordTransfer {
         LOGGER.info("Migrating category: "+srcCat.getName());
         return migrateCategoryVoiceChannels(srcCat, dstCat)
                 .then(migrateCategoryTextChannels(srcCat, dstCat)
-                        .map(TextChannelMigrationResult::getMessageCount)
+                        .map(TextChannelMigrationResult::messageCount)
                         .reduce(Long::sum))
                 .onErrorResume(err -> {
                     LOGGER.warn("Error in category migration", err);
@@ -270,9 +270,15 @@ public class DiscordTransfer {
     }
 
     private Mono<Message> migrateMessage(@NonNull Message msg, @NonNull TextChannel dstChan) {
-        if (msg.getType() != Message.Type.DEFAULT && msg.getType() != Message.Type.REPLY)
+        if (msg.getType() != Message.Type.DEFAULT && msg.getType() != Message.Type.REPLY) {
+            LOGGER.info("Skipping message ("+dstChan.getName()+"/#"+msg.getId().asString()
+                    +"), unknown type: "+msg.getType().name());
             return Mono.empty(); // Not a user message, do not migrate
-        if (!msg.getAuthor().isPresent()) return Mono.empty(); // No author, do not migrate
+        }
+        if (msg.getAuthor().isEmpty()) {
+            LOGGER.info("Skipping message ("+dstChan.getName()+"/#"+msg.getId().asString()+"), no author");
+            return Mono.empty(); // No author, do not migrate
+        }
         CompletableFuture<Message> fut = new CompletableFuture<>();
         User author = msg.getAuthor().get();
         LOGGER.info("Migrating message ("+dstChan.getName()+"/#"+msg.getId().asString()+"): "+
@@ -308,9 +314,8 @@ public class DiscordTransfer {
                         }
                         stream.close();
                         buffer.flush();
-                        LOGGER.warn("Attachment HTTP error:\n\t"+
-                                new String(buffer.toByteArray(), StandardCharsets.UTF_8)
-                                        .replaceAll("\n", "\n\t"));
+                        LOGGER.warn("Attachment HTTP error:\n\t"+buffer.toString(StandardCharsets.UTF_8)
+                                .replaceAll("\n", "\n\t"));
                     } else {
                         // Upload downloaded data
                         m.addFile(att.getFilename(), conn.getInputStream());
@@ -400,29 +405,7 @@ public class DiscordTransfer {
 
     public static class HelpRequestedException extends RuntimeException {}
 
-    public static class TextChannelMigrationResult {
-        public final TextChannel sourceChan;
-        public final TextChannel destChan;
-        public final long messageCount;
-
-        public TextChannelMigrationResult(TextChannel sourceChan, TextChannel destChan, long messageCount) {
-            this.sourceChan = sourceChan;
-            this.destChan = destChan;
-            this.messageCount = messageCount;
-        }
-
-        public TextChannel getSourceChan() {
-            return sourceChan;
-        }
-
-        public TextChannel getDestChan() {
-            return destChan;
-        }
-
-        public long getMessageCount() {
-            return messageCount;
-        }
-    }
+    public record TextChannelMigrationResult(TextChannel sourceChan, TextChannel destChan, long messageCount) {}
 
     // ====== Command line interface
 
