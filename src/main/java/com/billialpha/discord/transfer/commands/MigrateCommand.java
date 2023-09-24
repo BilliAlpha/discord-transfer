@@ -9,7 +9,6 @@ import discord4j.core.object.Embed;
 import discord4j.core.object.entity.Attachment;
 import discord4j.core.object.entity.Guild;
 import discord4j.core.object.entity.Message;
-import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.Category;
 import discord4j.core.object.entity.channel.TextChannel;
 import discord4j.core.object.entity.channel.VoiceChannel;
@@ -20,6 +19,7 @@ import discord4j.core.spec.EmbedCreateSpec;
 import discord4j.core.spec.MessageCreateSpec;
 import discord4j.core.spec.TextChannelCreateSpec;
 import discord4j.core.spec.VoiceChannelCreateSpec;
+import discord4j.discordjson.json.UserData;
 import discord4j.discordjson.possible.Possible;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,6 +66,7 @@ public class MigrateCommand extends Command {
                             "Only migrate messages after the given date", Instant::parse)
                     .withOption("delay", "d",
                             "Pause between each message posted", Integer::parseUnsignedInt, 0)
+                    .withFlag("no-bot", null,"Do not copy bot messages")
                     .withFlag("no-reupload", null, "Do not re-upload attachments")
                     .build(),
             MigrateCommand::new
@@ -79,6 +80,7 @@ public class MigrateCommand extends Command {
     private final Instant afterDate;
     private final int delay;
     private final boolean reUploadFiles;
+    private final boolean noBotMessages;
     private final int verbosity;
     private final Scheduler scheduler;
 
@@ -91,6 +93,7 @@ public class MigrateCommand extends Command {
         this.reUploadFiles = !params.hasFlag("no-reupload");
         this.verbosity = params.get("verbose");
         this.scheduler = Schedulers.parallel();
+        this.noBotMessages = params.hasFlag("no-bot");
 
         Snowflake srcGuildId = params.get("source");
         try {
@@ -208,14 +211,18 @@ public class MigrateCommand extends Command {
             return Mono.empty(); // Not a user message, do not migrate
         }
 
-        if (msg.getAuthor().isEmpty()) {
-            LOGGER.debug("Skipping message ("+logId+"), no author");
-            return Mono.empty(); // No author, do not migrate
+        UserData author = msg.getUserData();
+        if (author.system().toOptional().orElse(false)) {
+            return Mono.empty(); // System message, do not migrate
+        }
+
+        if (this.noBotMessages && author.bot().toOptional().orElse(false)) {
+            LOGGER.debug("Skipping message ("+logId+"), not migrating bot messages");
+            return Mono.empty(); // Bot message, do not migrate
         }
 
         CompletableFuture<Message> fut = new CompletableFuture<>();
-        User author = msg.getAuthor().get();
-        LOGGER.info("Migrating message ("+logId+"): "+author.getUsername()+" at "+msg.getTimestamp());
+        LOGGER.info("Migrating message ("+logId+"): "+author.username()+" at "+msg.getTimestamp());
         MessageCreateSpec.Builder m = MessageCreateSpec.builder();
         if (verbosity >= 2) {
             LOGGER.debug("Raw message:\n\t" + msg.getContent().replaceAll("\n", "\n\t"));
@@ -224,10 +231,7 @@ public class MigrateCommand extends Command {
         // Add message info to embed
         String message = msg.getContent().replaceAll("<@&\\d+>", ""); // Remove role mentions
         EmbedCreateSpec.Builder embed = EmbedCreateSpec.builder()
-                .author(
-                        author.getUsername(),
-                        "https://discord.com/channels/@me/" + author.getId().asString(),
-                        author.getAvatarUrl())
+                .author(author.username(), null, author.avatar().orElse(null))
                 .timestamp(msg.getEditedTimestamp().orElse(msg.getTimestamp()))
                 .description(message);
 

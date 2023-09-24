@@ -6,7 +6,7 @@
 
     <groupId>com.billialpha.discord</groupId>
     <artifactId>discord-transfer</artifactId>
-    <version>3.0.0</version>
+    <version>3.0.1</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -63,7 +63,7 @@
         <dependency>
             <groupId>com.discord4j</groupId>
             <artifactId>discord4j-core</artifactId>
-            <version>3.2.3</version>
+            <version>3.2.6</version>
         </dependency>
     </dependencies>
 </project>

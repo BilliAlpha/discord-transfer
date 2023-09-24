@@ -3,7 +3,7 @@ _A discord bot for copying messages between guilds_
 
 [![build](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml/badge.svg)](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml)
 
-**Current version: [v3.0.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v3.0.1](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 
@@ -40,28 +40,34 @@ $env:DISCORD_TOKEN="MY_BOT_TOKEN_HERE"
 java -jar discord-transfer.jar [arguments...]
 ```
 
-The bot always needs at least one argument, the action to perform.
+The bot behaviour depends on the `action` you select.
 
 `java -jar discord-transfer.jar <action> [options...] [arguments...]`
 
-You will probably want to use the `migrate` action to transfer messages,
+In most cases you'll probably want to use the `migrate` action to transfer messages,
 but there is also the `clean` action that removes the reactions used to mark migrated messages
-and the `help` action to get a detailed explanation of each eaction.
 
-Each action has it's own set of options and parameters.
+#### `migrate` action ####
 
-The `migrate` action needs two arguments:
-1. The ID of the "source" server, the Discord server you want to copy messages from.
-2. The ID of the "destination" server, where you want to copy the messages to.
+`java -jar discord-transfer.jar migrate [options...] <source> <destination>`
 
-There are also options to customize the migration behavior.
+The migrate action takes 2 arguments:
+1. The Discord ID (Snowflake) of the source Guild (the one you want to copy messages from)
+2. The Discord ID of the destination Guild (the one in which messages will be copied)
 
+There are also options to customize the migration behavior:
 - `--category`: Specify specific channel categories to migrate, expects a Discord category ID
 - `--skip-channel`: Specify channels that should not be migrated, expects a Discord channel ID
 - `--after`: Only migrate messages after the give date (format ISO-8601, ex: `1997−07−16T19:20:30,451Z`)
 - `--delay`: Add a delay between each message migration
 
-Example: `java -jar discord-transfer.jar migrate 123456789 987654321 --skip 741852963`
+Example: `java -jar discord-transfer.jar migrate 123456789 987654321 --skip-channel 741852963`
+
+#### `clean` action ####
+
+`java -jar discord-transfer.jar clean [options...] <server>`
+
+The clean action takes a single argument, the Discord ID (Snowflake) of the Guild you want to clean reactions from.
 
 ### More info ? ###
 

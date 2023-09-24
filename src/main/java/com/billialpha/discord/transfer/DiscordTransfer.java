@@ -20,7 +20,7 @@ import java.util.*;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "3.0.0";
+    public static final String VERSION = "3.0.1";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     public static final Map<String, Command.Description> ACTIONS = new HashMap<>();
     static {
@@ -40,11 +40,14 @@ public class DiscordTransfer {
 
         LOGGER.debug("Logging in ...");
         GatewayDiscordClient client = Objects.requireNonNull(discord.gateway()
-                .setEnabledIntents(IntentSet.of(Intent.GUILD_MESSAGES))
+                .setEnabledIntents(IntentSet.of(
+                        Intent.MESSAGE_CONTENT,
+                        Intent.GUILD_MESSAGES,
+                        Intent.GUILD_MESSAGE_REACTIONS))
                 .login().block(), "Invalid bot token");
 
         User self = Objects.requireNonNull(client.getSelf().block());
-        LOGGER.info("Logged in, user: "+self.getUsername()+"#"+self.getDiscriminator());
+        LOGGER.info("Logged in, user: "+self.getUsername());
 
         return client;
     }
