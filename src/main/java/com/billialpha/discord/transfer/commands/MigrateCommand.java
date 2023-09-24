@@ -9,6 +9,7 @@ import discord4j.core.object.Embed;
 import discord4j.core.object.entity.Attachment;
 import discord4j.core.object.entity.Guild;
 import discord4j.core.object.entity.Message;
+import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.Category;
 import discord4j.core.object.entity.channel.TextChannel;
 import discord4j.core.object.entity.channel.VoiceChannel;
@@ -211,18 +212,22 @@ public class MigrateCommand extends Command {
             return Mono.empty(); // Not a user message, do not migrate
         }
 
-        UserData author = msg.getUserData();
-        if (author.system().toOptional().orElse(false)) {
-            return Mono.empty(); // System message, do not migrate
-        }
 
-        if (this.noBotMessages && author.bot().toOptional().orElse(false)) {
-            LOGGER.debug("Skipping message ("+logId+"), not migrating bot messages");
-            return Mono.empty(); // Bot message, do not migrate
+        User author = msg.getAuthor().orElse(null);
+        if (author == null) {
+            UserData authorData = msg.getUserData();
+            if (authorData.system().toOptional().orElse(false)) {
+                return Mono.empty(); // System message, do not migrate
+            }
+            if (this.noBotMessages && authorData.bot().toOptional().orElse(false)) {
+                LOGGER.debug("Skipping message ("+logId+"), not migrating bot messages");
+                return Mono.empty(); // Bot message, do not migrate
+            }
+            author = new User(client, authorData);
         }
 
         CompletableFuture<Message> fut = new CompletableFuture<>();
-        LOGGER.info("Migrating message ("+logId+"): "+author.username()+" at "+msg.getTimestamp());
+        LOGGER.info("Migrating message ("+logId+"): "+author.getUsername()+" at "+msg.getTimestamp());
         MessageCreateSpec.Builder m = MessageCreateSpec.builder();
         if (verbosity >= 2) {
             LOGGER.debug("Raw message:\n\t" + msg.getContent().replaceAll("\n", "\n\t"));
@@ -231,7 +236,7 @@ public class MigrateCommand extends Command {
         // Add message info to embed
         String message = msg.getContent().replaceAll("<@&\\d+>", ""); // Remove role mentions
         EmbedCreateSpec.Builder embed = EmbedCreateSpec.builder()
-                .author(author.username(), null, author.avatar().orElse(null))
+                .author(author.getUsername(), null, author.getAvatarUrl())
                 .timestamp(msg.getEditedTimestamp().orElse(msg.getTimestamp()))
                 .description(message);
 

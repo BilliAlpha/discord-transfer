@@ -15,12 +15,10 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 
 /**
- * Bot invite link:
- * https://discord.com/api/oauth2/authorize?client_id={ CLIENT_ID }&scope=bot
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "3.0.1";
+    public static final String VERSION = "3.0.2";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     public static final Map<String, Command.Description> ACTIONS = new HashMap<>();
     static {
