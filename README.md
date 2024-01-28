@@ -3,7 +3,7 @@ _A discord bot for copying messages between guilds_
 
 [![build](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml/badge.svg)](https://github.com/BilliAlpha/discord-transfer/actions/workflows/maven.yml)
 
-**Current version: [v3.0.2](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
+**Current version: [v3.1.0](https://github.com/BilliAlpha/discord-transfer/releases/latest)**
 
 ## How to use ? ##
 
@@ -56,8 +56,10 @@ The migrate action takes 2 arguments:
 2. The Discord ID of the destination Guild (the one in which messages will be copied)
 
 There are also options to customize the migration behavior:
+- `--include-channel`: Specify channels that should be migrated, it's category will automatically be created if missing, expects a Discord channel ID
 - `--category`: Specify specific channel categories to migrate, expects a Discord category ID
 - `--skip-channel`: Specify channels that should not be migrated, expects a Discord channel ID
+- `--text-only`: Will only migrate text channels (skips voice channel creation)
 - `--after`: Only migrate messages after the give date (format ISO-8601, ex: `1997−07−16T19:20:30,451Z`)
 - `--delay`: Add a delay between each message migration
 

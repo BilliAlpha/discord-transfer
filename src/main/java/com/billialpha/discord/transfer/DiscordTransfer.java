@@ -18,7 +18,7 @@ import java.util.*;
  * @author BilliAlpha <billi.pamege.300@gmail.com>
  */
 public class DiscordTransfer {
-    public static final String VERSION = "3.0.2";
+    public static final String VERSION = "3.1.0";
     private static final Logger LOGGER = LoggerFactory.getLogger(DiscordTransfer.class);
     public static final Map<String, Command.Description> ACTIONS = new HashMap<>();
     static {

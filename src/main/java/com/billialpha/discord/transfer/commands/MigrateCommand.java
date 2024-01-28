@@ -41,10 +41,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 
 public class MigrateCommand extends Command {
     private static final Logger LOGGER = LoggerFactory.getLogger(MigrateCommand.class);
@@ -63,10 +61,13 @@ public class MigrateCommand extends Command {
                             "Limit the migration to specific categories", Snowflake::of)
                     .withArrayOption("skip-channel", "s",
                             "Ignore this channel during migration", Snowflake::of)
+                    .withArrayOption("include-channel", "i",
+                            "Include this channel during migration", Snowflake::of)
                     .withOption("after", "a",
                             "Only migrate messages after the given date", Instant::parse)
                     .withOption("delay", "d",
                             "Pause between each message posted", Integer::parseUnsignedInt, 0)
+                    .withFlag("text-only", null,"Only migrate text channels")
                     .withFlag("no-bot", null,"Do not copy bot messages")
                     .withFlag("no-reupload", null, "Do not re-upload attachments")
                     .build(),
@@ -77,17 +78,20 @@ public class MigrateCommand extends Command {
     private final Guild srcGuild;
     private final Guild destGuild;
     private final Set<Snowflake> skipChannels;
+    private final Set<Snowflake> includeChannels;
     private final Set<Snowflake> categories;
     private final Instant afterDate;
     private final int delay;
     private final boolean reUploadFiles;
     private final boolean noBotMessages;
+    private final boolean textOnly;
     private final int verbosity;
     private final Scheduler scheduler;
 
     public MigrateCommand(Invocation params) {
         this.client = params.client;
         this.skipChannels = new HashSet<>(params.getList("skip-channel"));
+        this.includeChannels = new HashSet<>(params.getList("include-channel"));
         this.categories = new HashSet<>(params.getList("category"));
         this.afterDate = params.get("after");
         this.delay = params.get("delay");
@@ -95,6 +99,7 @@ public class MigrateCommand extends Command {
         this.verbosity = params.get("verbose");
         this.scheduler = Schedulers.parallel();
         this.noBotMessages = params.hasFlag("no-bot");
+        this.textOnly = params.hasFlag("text-only");
 
         Snowflake srcGuildId = params.get("source");
         try {
@@ -116,43 +121,54 @@ public class MigrateCommand extends Command {
     @Override
     public void execute() {
         LOGGER.info("Starting migration ...");
-        Optional<Long> migrated = getSelectedCategories()
+
+        if (!textOnly) {
+            LOGGER.info("Creating categories and voice channels in destination guild");
+            long migratedVoiceChans = getSelectedCategories()
+                    .parallel()
+                    .runOn(scheduler)
+                    .flatMap(this::migrateCategory)
+                    .reduce(Long::sum)
+                    .blockOptional()
+                    .orElse(0L);
+            if (migratedVoiceChans > 0) {
+                LOGGER.info("Successfully created "+migratedVoiceChans+" voice channels");
+            } else {
+                LOGGER.info("No voice channel created");
+            }
+        }
+
+        LOGGER.info("Migrating text channels");
+        long migratedMessages = getSelectedTextChannels()
                 .parallel()
                 .runOn(scheduler)
-                .flatMap(srcCat ->
-                        destGuild.getChannels().ofType(Category.class)
-                                .filter(c -> c.getName().equals(srcCat.getName()))
-                                .singleOrEmpty()
-                                .switchIfEmpty(
-                                        destGuild.createCategory(srcCat.getName()))
-                                .flatMapMany(dstCat -> migrateCategory(srcCat, dstCat))
-                )
+                .flatMap(c -> this.migrateTextChannel(c).onErrorContinue((err, x) ->
+                        LOGGER.warn("Error in text channel migration (" + c.getName() + "):", err)))
+                .map(TextChannelMigrationResult::messageCount)
                 .reduce(Long::sum)
-                .blockOptional();
-
-        if (migrated.isPresent() && migrated.get() > 0) {
-            LOGGER.info("Migration finished successfully ("+migrated.get()+" messages)");
+                .blockOptional()
+                .orElse(0L);
+        if (migratedMessages > 0) {
+            LOGGER.info("Successfully migrated "+migratedMessages+" messages");
         } else {
-            LOGGER.info("Migration finished without migrating any message");
+            LOGGER.info("No message migrated");
         }
 
         client.logout().block();
         LOGGER.debug("Logged out");
     }
 
-    private Mono<Long> migrateCategory(@NonNull Category srcCat, @NonNull Category dstCat) {
+    private Mono<Long> migrateCategory(@NonNull Category srcCat) {
         LOGGER.info("Migrating category: "+srcCat.getName()+" ("+srcCat.getId().asString()+")");
-        return migrateCategoryVoiceChannels(srcCat, dstCat)
-                .then(migrateCategoryTextChannels(srcCat, dstCat)
-                        .map(TextChannelMigrationResult::messageCount)
-                        .reduce(Long::sum))
-                .onErrorResume(err -> {
-                    LOGGER.warn("Error in category migration", err);
-                    return Mono.empty();
-                });
+        return destGuild.getChannels().ofType(Category.class)
+                .filter(c -> c.getName().equals(srcCat.getName()))
+                .singleOrEmpty()
+                .switchIfEmpty(destGuild.createCategory(srcCat.getName()))
+                .flatMapMany(dstCat -> migrateCategoryVoiceChannels(srcCat, dstCat))
+                .reduce(Long::sum);
     }
 
-    private Mono<Void> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
+    private Mono<Long> migrateCategoryVoiceChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
         return srcCat.getChannels().ofType(VoiceChannel.class)
                 // Filter on non-migrated channels
                 .filterWhen(srcChan -> dstCat.getChannels()
@@ -166,34 +182,42 @@ public class MigrateCommand extends Command {
                         .name(srcChan.getName())
                         .parentId(dstCat.getId())
                         .position(srcChan.getRawPosition()).build()))
-                .then();
+                .count();
     }
 
-    private Flux<TextChannelMigrationResult> migrateCategoryTextChannels(@NonNull Category srcCat, @NonNull Category dstCat) {
-        return srcCat.getChannels().ofType(TextChannel.class)
-                .parallel().runOn(scheduler)
-                // Filter on non-skipped channels
-                .filter(c -> !skipChannels.contains(c.getId()))
-                .flatMap(srcChan -> dstCat.getChannels()
-                        .ofType(TextChannel.class)
-                        .filter(c -> c.getName().equals(srcChan.getName()))
-                        .singleOrEmpty()
-                        .switchIfEmpty(destGuild.createTextChannel(TextChannelCreateSpec.builder()
-                                .name(srcChan.getName())
-                                .topic(srcChan.getTopic().map(Possible::of).orElse(Possible.absent()))
-                                .nsfw(srcChan.isNsfw())
-                                .parentId(dstCat.getId())
-                                .position(srcChan.getRawPosition())
-                                .build()))
-                        .zipWith(Mono.just(srcChan)))
-                // T1 = dest chan, T2 = src chan
-                .flatMap(tuple -> migrateTextChannel(tuple.getT2(), tuple.getT1())
-                        .count()
-                        .map(count -> new TextChannelMigrationResult(tuple.getT2(), tuple.getT1(), count)))
-                .groups().flatMap(Flux::collectList).flatMapIterable(Function.identity())
-                .onErrorContinue((err, x) -> LOGGER.warn("Error in channel migration", err));
+    private Flux<TextChannelMigrationResult> migrateTextChannel(@NonNull TextChannel srcChan) {
+        return srcChan.getCategory()
+                .flatMapMany(srcCat ->
+                    // Find destination category
+                    destGuild.getChannels()
+                            .ofType(Category.class)
+                            // Filter on name
+                            .filter(cat -> srcCat.getName().equals(cat.getName()))
+                            // Create category if it doesn't exist
+                            .switchIfEmpty(destGuild.createCategory(srcCat.getName()))
+                            .flatMap(dstCat ->
+                                // Find destination channel
+                                dstCat.getChannels()
+                                        .ofType(TextChannel.class)
+                                        // Filter on name
+                                        .filter(c -> c.getName().equals(srcChan.getName()))
+                                        .singleOrEmpty()
+                                        // Create channel if it doesn't exist
+                                        .switchIfEmpty(destGuild.createTextChannel(TextChannelCreateSpec.builder()
+                                                .name(srcChan.getName())
+                                                .topic(srcChan.getTopic().map(Possible::of).orElse(Possible.absent()))
+                                                .nsfw(srcChan.isNsfw())
+                                                .parentId(dstCat.getId())
+                                                .position(srcChan.getRawPosition())
+                                                .build()))
+                            )
+                )
+                // Migrate channel messages
+                .flatMap(dstChan -> migrateTextChannelMessages(srcChan, dstChan));
     }
-    private Flux<Message> migrateTextChannel(@NonNull TextChannel srcChan, @NonNull TextChannel dstChan) {
+    private Mono<TextChannelMigrationResult> migrateTextChannelMessages(
+            @NonNull TextChannel srcChan, @NonNull TextChannel dstChan
+    ) {
         LOGGER.info("Migrating channel: "+srcChan.getName()+" ("+srcChan.getId().asString()+")");
         Snowflake startDate = getChannelStartDate(srcChan.getId());
         LOGGER.debug("Channel date: "+startDate.getTimestamp());
@@ -202,7 +226,9 @@ public class MigrateCommand extends Command {
         return flux.filter(m -> m.getReactions().stream() // Filter on non migrated messages
                         .filter(Reaction::selfReacted)
                         .noneMatch(r -> r.getEmoji().equals(MIGRATED_EMOJI)))
-                .flatMap(m -> migrateMessage(m, dstChan)); // Perform migration
+                .flatMap(m -> migrateMessage(m, dstChan)) // Perform migration
+                .count()
+                .map(count -> new TextChannelMigrationResult(srcChan, dstChan, count));
     }
 
     private Mono<Message> migrateMessage(@NonNull Message msg, @NonNull TextChannel dstChan) {
@@ -350,13 +376,47 @@ public class MigrateCommand extends Command {
                 : chanId;
     }
 
+    /**
+     * The list of text channels to migrate.
+     * <p>
+     *     This list includes all text channels from the selected categories
+     *     (see {@link MigrateCommand#getSelectedCategories()} excluding skipped channels
+     *     to which explicitly included channels are added.
+     * </p>
+     * @return A flux of selected text channels in the source guild.
+     */
+    private Flux<TextChannel> getSelectedTextChannels() {
+        return Flux.concat(
+                getSelectedCategories()
+                        .flatMap(Category::getChannels)
+                        .ofType(TextChannel.class),
+                Mono.justOrEmpty(includeChannels)
+                        .flatMapMany(Flux::fromIterable)
+                        .flatMap(srcGuild::getChannelById)
+                        .ofType(TextChannel.class)
+        ).filter(c -> !skipChannels.contains(c.getId()));
+    }
+
+    /**
+     * The list of categories to migrate.
+     * <p>
+     *     If at least one category was specified in parameter then only return
+     *     explicitly selected categories, otherwise, and if no explicit channel are included,
+     *     return all categories present in the source guild.
+     * </p>
+     * @return A flux of selected categories in the source guild.
+     */
     private Flux<Category> getSelectedCategories() {
-        if (categories != null) {
-            return Flux.fromIterable(categories)
-                    .flatMap(srcGuild::getChannelById)
-                    .ofType(Category.class);
-        }
-        return srcGuild.getChannels().ofType(Category.class);
+        return Mono.justOrEmpty(categories)
+                .flatMapMany(Flux::fromIterable)
+                .flatMap(srcGuild::getChannelById)
+                .ofType(Category.class)
+                // If no catagory was selected
+                .switchIfEmpty(includeChannels != null && includeChannels.size() > 0
+                        // But there are included channels, no categories
+                        ? Flux.empty()
+                        // Otherwise, return all existing categories
+                        : srcGuild.getChannels().ofType(Category.class));
     }
 
     public record TextChannelMigrationResult(TextChannel sourceChan, TextChannel destChan, long messageCount) {}
